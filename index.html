@@ -1,0 +1,136 @@
+<!DOCTYPE html>
+
+<html>
+	<body>
+		<div>
+			<h2>Introduction</h2>
+			server-vuln.js is a server built on a node.js environment using the Express framework and MongoDB for persistent storage. It establishes three only routes:
+			<br><br>
+			POST /sendLocation <br>
+			GET /checkins.json <br>
+			GET /
+			<br><br>
+			When posting to /sendLocation, the client must include a login (string), lat (number) and lng (number). As this data is pushed to the DB, any other client can see the data (sorted by object ID) on '/'. If a query is passed with a login string to /checkins.json, the raw data of checkins for only that username will be returned.
+
+			<h2>Methodology</h2>
+			First, I refactored the JavaScript for readability -- some styling did not conform to best practices. No functionality or logic was altered in any way. I also tested the program for non-security related bugs, and none were found.
+			<br><br>
+			Postman (www.getpostman.com) was used in place of cURL in order to test routes directly with raw data. Postman can handle any HTTP verb on any localhost route via a desktop GUI that makes it really easy to specify key-values for both queries and bodies.
+			<br><br>
+			Burp Suite was also used for scanning.
+			<br><br>
+			(Of course, console logging was the most invaluable tool for determining data manipulation logic).
+
+			<h2>Abstract of Findings</h2>
+			Numerous vulnerabilities have been found, ranging from low to high severity levels.
+			<br><br>
+			At the lowest level: you are sending too much data to your users, such as an "Object ID," which usually is better off hidden. This will really only be a significant problem later if you will start storing more sensitive data in your database, which from the looks of it, seems likely that you will want to do at some point later in productio).
+			<br><br>
+			The biggest security threat to your app right now is an <a href="https://en.wikipedia.org/wiki/Cross-site_scripting">"XSS" vulnerability</a>. You are allowing hackers to send malicious code to your server, allowing them to play tricks on other users.
+			<br><br>
+			Finally, you are enabling website of other origins to access sensitive data on your own server, which generally is not recommended. I advise that if you do this, you make a list of "trusted origins" which you can grant permission to. Details of how to do this can be found below. This issue is ranked as a medium severity level because it is an indirect means by which hackers are more easily able to engage in the XSS that I describe above.
+
+			<h2>Issues found</h2>
+
+			<div>
+				<h3>Issue</h3>
+				Enabling CORS
+
+				<h4>Location</h4>
+				Line 18, 19 in server-vuln.js
+
+				<h4>Severity</h4>
+				Medium
+
+				<h4>Description</h4>
+				In /sendLocation header:
+				For Access-Control-Allow-Origin: *
+				Access-Control-Allow-Headers: X-Requsted-With
+
+				In other words, the browser is told that any and all origins can access the contents
+
+				This is marked as a medium severity level because it is not a direct vulnerability; it simply makes other vulnerabilities such as XSS more easily attackable.
+				
+				<h4>Resolution</h4>
+				Option #1: Simply remove both lines 18 and 19 entirely and the browser will default to origin-only access. You can still take user input from a client-side form that can POST data from users via ajax.
+				Option #2: If there are specific (trustworthy) origins that you need to be able to POST data in the /sendLocation port, then make a list of "trusted origins" and specify those as the only ones who have CORS privelages -- never use the wildcard ('*').
+			</div>
+			<div>
+				<h3>Issue</h3>
+				Cross-Site Scripting
+
+				<h4>Location</h4>
+				POST /sendLocation route.
+
+				<h4>Severity</h4>
+				Very high
+
+				<h4>Description</h4>
+				Data that is received via the /sendLocation route is not sanitized, allowing a predator to inject malicious JavaScript
+				
+				<h4>Proof of vulnerability</h4>
+				The following body was sent to /sendLocation via Postman:<br><br>
+				<img src="1.png"><br>
+				Then, upon loading '/' locally:<br><br>
+				<img src="2.png"><br>
+				Given this ability, predators can also redirect a user to a site for phising, further malicious injecting, etc. They can even redirect the user back to the real site again so that the attack can occur unbeknownst to them.
+
+				<h4>Resolution</h4>
+				Sanitize data coming from /sendLocation. Validation can occur as early as line 18. The validation should be vigilant of the &quot;&lt;script&gt;&quot; tag, indicating an attempt to embed JavaScript into HTML. One option would be to convert  &quot;&lt;&quot; into an escape character that HTML will render, so that your users can still use the "<" and ">" characters in their usernames.
+			</div>
+			<div>
+				<h3>Issue</h3>
+				Insecure Direct Object Reference
+
+				<h4>Location</h4>
+				Line 73 (/checkins.json route)
+
+				<h4>Severity</h4>
+				Low
+
+				<h4>Description</h4>
+				The /checkins.json route provides clients with a very direct method of querying the DB. Data is returned as a JSON object (as if it was returned from the actual MongoDB shell). Unfortunately, this includes the Object ID (_id) which in most cases is conventially hidden from the end user. Even if you determine the Object ID is harmlessly shared, it would be prudent to protect this in case later, you decide to store more (private) information in each document as elements of the object, for example:
+				<br><br>
+				<a href="http://stackoverflow.com/questions/13729151/am-i-exposing-sensitive-data-if-i-put-a-bson-id-in-a-url">See here</a>
+				<br><br>
+				Copied from above:
+				<br><br>
+				By crawling your website, one could:
+				<br>
+				- find about some hidden objects: for instance, if the counter part goes from 0x....b1 to 0x....b9 between times t1 and t2, one can guess ObjectIds within these invervals. However, guessing ids is most likely useless if you enforce access permissions
+				<br>
+				- know the signup date of each user (not very sensitive info but better than nothing)
+				<br>
+				- deduce actual (as opposed to publicly available) business hours from the timestamps of objects created by the staff
+				<br>
+				- deduce in which timezones your audience lives from the timestamps of user-generated objects: if your website is one which people use mostly at lunchtime, then one could measure peaks of ObjectIds and deduce that a peak at 8 PM UTC means the audience was on the US West coast
+				<br>
+				- and more generally, by crawling most of your website, one can build a timeline of the success of your service, having for any given time knowledge of: your user count, levels of user engagement, how many servers you've got, how often your servers are restarted. PID changes occurring on weekends are more likely crashes, whereas those on business days are more likely crashes + software revisions
+				and probably find other info specific to your business processes and domain
+				<br>
+				To be fair, even with random ids one can infer a lot. The main issue is that you need to prevent anyone from scraping a statistically significant part of your site. But if someone is determined, they'll succeed eventually, which is why providing them with all of this extra, timestamped info seems wrong.
+				<br><br>
+				NOTE: A lot of user data seems to already be made publically available by your app's homepage, so some of these points might not be of particular risk. Nonetheless, you would be better off keeping object IDs private
+
+				<h4>Proof of vulnerability</h4>
+				<img src="3.png"><br>
+
+				<h4>Resolution</h4>
+				On line 73, add something like the following pseudo:
+				<br><be>
+				1. arr = new array<br>
+				2. for each object i in results<br>
+				3.		obj = new object<br>
+				4.		obj.foo = i.foo<br>
+				5.		... //do the same for each element that you DO want to share publically<br>
+				6.		arr.push(obj)<br>
+				7. response.send(arr)<br>
+
+			</div>
+
+			<h2>Conclusion</h2>
+				In conclusion, only one vulnerability was found that could directly harm users. All vulnerabilties found could be easily fixed via improved data validation. Other than validation, no significant logic errors or bugs were found in the source code, although some changes will still be necessary to make it production level. For more proof of how dangerous XSS can be alone, visit: vulnerableapp.herokuapp.com.
+			<p></p>
+		</div>
+	</body>
+</html>
